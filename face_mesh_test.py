@@ -2,6 +2,8 @@ import cv2
 import mediapipe as mp
 import os
 import numpy as np
+import json
+from pathlib import Path
 
 # -------------------------------
 # 1. MEDIA PIPE INITIALIZATION
@@ -11,11 +13,51 @@ mp_face_detection = mp.solutions.face_detection
 # -------------------------------
 # 2. LBPH TRAINER (LOAD OR TRAIN)
 # -------------------------------
-recognizer = cv2.face.LBPHFaceRecognizer_create()
-
 DATASET_DIR = "dataset_faces"
 
+def save_model(recognizer, label_map):
+    """Save the trained model and label map to disk."""
+    # Create models directory if it doesn't exist
+    Path("models").mkdir(exist_ok=True)
+    
+    # Save the trained model
+    recognizer.save("models/lbph_model.yml")
+    
+    # Save the label map
+    with open("models/label_map.json", 'w') as f:
+        json.dump(label_map, f)
+
+def load_model():
+    """Load the trained model and label map from disk."""
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    label_map = {}
+    
+    try:
+        # Load the trained model
+        recognizer.read("models/lbph_model.yml")
+        
+        # Load the label map
+        if os.path.exists("models/label_map.json"):
+            with open("models/label_map.json", 'r') as f:
+                label_map = json.load(f)
+                # Convert string keys back to integers
+                label_map = {int(k): v for k, v in label_map.items()}
+        
+        print("Loaded pre-trained model and label map.")
+        return recognizer, label_map
+    except Exception as e:
+        print(f"No pre-trained model found or error loading: {e}")
+        print("Will train a new model...")
+        return None, None
+
 def train_lbph():
+    # Try to load existing model first
+    recognizer, label_map = load_model()
+    if recognizer is not None and label_map is not None:
+        return recognizer, label_map
+        
+    # If no model exists, train a new one
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
     images = []
     labels = []
     label_map = {}
@@ -37,12 +79,21 @@ def train_lbph():
 
         label_id += 1
 
-    if images:
-        recognizer.train(images, np.array(labels))
-        print("LBPH Training complete.")
-    return label_map
+    if not images:
+        print("No training images found! Please add images to the dataset_faces directory.")
+        exit(1)
+        
+    print(f"Training LBPH model with {len(images)} images...")
+    recognizer.train(images, np.array(labels))
+    print("LBPH Training complete.")
+    
+    # Save the trained model and label map
+    save_model(recognizer, label_map)
+    
+    return recognizer, label_map
 
-label_map = train_lbph()
+# Train or load the model
+recognizer, label_map = train_lbph()
 
 # -------------------------------
 # 3. REAL-TIME RECOGNITION
@@ -50,7 +101,6 @@ label_map = train_lbph()
 cap = cv2.VideoCapture(0)
 
 with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5) as detector:
-
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -61,7 +111,6 @@ with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence
 
         if results.detections:
             for detection in results.detections:
-
                 # Extract bounding box
                 bbox = detection.location_data.relative_bounding_box
                 h, w, _ = frame.shape
@@ -90,7 +139,7 @@ with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence
                                 cv2.FONT_HERSHEY_SIMPLEX,
                                 0.8, (0, 255, 0), 2)
 
-        cv2.imshow("MediaPipe + LBPH Face Recognition", frame)
+        cv2.imshow("Face Recognition", frame)
         if cv2.waitKey(1) == ord('q'):
             break
 
